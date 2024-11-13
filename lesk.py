@@ -1,4 +1,5 @@
 from loader import load_instances, load_key
+from embeddings_nn import call_train, call_predict
 import nltk
 import math
 import json
@@ -196,21 +197,90 @@ def pos_tag_mapper(tag):
         return wn.ADV
     return None
 
-
-
 '''
-Yarowasky's bootstrap method refered from 
-Speech & Language Processing, Jurafsky, D.2nd (Page 650)
+Process a dictonary that is better structured for my methods, and refactoring
 '''
-def yarowsky_bootstrap(X):
-    ##Define a heuristic for automatic labelling
-    seedset = 0
+def process_data(keys, instances):
+    data = []
+    for item, key in zip(instances.items(), keys):
+        data_element = {"word": "", "context": "", "pos": "", "label": ""}
+        syn_key = keys[key][0]
+        y_label = key_to_synets(syn_key)
+        wsd_instance = item[1]
+        context = list(map(lambda x: x.decode("utf-8"), wsd_instance.context))
+        lemma = wsd_instance.lemma.decode("utf-8")
+        pos = wsd_instance.pos.decode("utf-8")
 
-
-
-
-    return 0
+        data_element['word'] = lemma
+        data_element['context'] = context    
+        data_element['pos'] = pos
+        data_element['label'] = y_label
+        data.append(data_element)
     
+    return data
+
+
+
+def method_calls(data, title_string):
+
+    display_dict = {
+        "most_frequent_baseline": 0,
+        "lesk_score_raw": 0,
+        "lesk_score_pos" : 0,
+        "lesk_score_preprocessed": 0, 
+        "lesk_score_preprocessed_pos": 0, 
+        "corpus_lesk": 0, 
+        "FFN, BERT-Embeddings" :0, 
+    }
+
+    y_correct_labels = []
+    x_most_frequent_baseline = []
+    x_lesk_syn_predictions = []
+    x_lesk_syn_predictions_pos = []
+    x_lesk_syn_predictions_pre = []
+    x_lesk_syn_predictions_pre_pos = []
+    x_corpus_lesk = [] 
+
+    for element in data:
+        #Get label:
+        y_correct_labels.append(element['label'])
+        #Baseline:
+        x_most_frequent_baseline.append(most_frequent_baseline(element['word']))
+        #Lesk:
+        x_lesk_syn_predictions.append(lesk_wsd(element['context'], element['word']))
+        x_lesk_syn_predictions_pos.append(lesk_wsd(element['context'], element['word'], pos = pos_tag_mapper(element['pos'])))
+        
+        ##After preprocessing
+        context_pre = preprocess_context_sentence(context_list=element['context'])
+        x_lesk_syn_predictions_pre.append(lesk_wsd(context_pre, element['word']))
+        x_lesk_syn_predictions_pre_pos.append(lesk_wsd(context=context_pre, lemma = element['word'], pos=pos_tag_mapper(element['pos'])))
+
+        #My Methods:
+        #METHOD A: Corpus Lesk
+        x_corpus_lesk.append(corpus_lesk(element['context'], element['word']))
+
+
+    #Method B: FFN with Bert embeddings
+    #Train the NN first
+    if title_string == "Dev":
+        print("Training NN called")
+        call_train(data)
+
+
+
+
+    
+    display_dict['most_frequent_baseline'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
+    display_dict['lesk_score_raw'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
+    display_dict['lesk_score_pos'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pos)
+    display_dict['lesk_score_preprocessed'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre)
+    display_dict["lesk_score_preprocessed_pos"] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre_pos)
+    display_dict["corpus_lesk"] = score_synset_lists(y_correct_labels, x_corpus_lesk)
+    display_dict["FFN, BERT-Embeddings"] = call_predict(data)
+    
+    table = tabulate(display_dict.items(), headers=["Method", title_string + " Score"], tablefmt="pretty")
+    print(table)
+
     
 '''
 used from @jcheung start code
@@ -228,58 +298,11 @@ def main():
     dev_instances = {k:v for (k,v) in dev_instances.items() if k in dev_key}
     test_instances = {k:v for (k,v) in test_instances.items() if k in test_key}
 
-    ##NOTE: 
-    ##We could use online learning by allowing it to generate similar sentence, for one word sense
-    ## Then use Yarowsky on the generated X. 
-
-    display_dict = {
-        "most_frequent_baseline": 0,
-        "lesk_score_raw": 0,
-        "lesk_score_pos" : 0,
-        "lesk_score_preprocessed": 0, 
-        "lesk_score_preprocessed_pos": 0, 
-        "corpus_lesk": 0
-    }
-
-    y_correct_labels = []
-    x_most_frequent_baseline = []
-    x_lesk_syn_predictions = []
-    x_lesk_syn_predictions_pos = []
-    x_lesk_syn_predictions_pre = []
-    x_lesk_syn_predictions_pre_pos = []
-    x_corpus_lesk = []
-    for item, key in zip(dev_instances.items(), dev_key):
-        syn_key = dev_key[key][0]
-        y_correct_labels.append(key_to_synets(syn_key))
-
-        ##Lesk() requires strings not bytes, throws error when input is b''
-        wsd_instance = item[1]
-        context = list(map(lambda x: x.decode("utf-8"), wsd_instance.context))
-        lemma = wsd_instance.lemma.decode("utf-8")
-        pos = wsd_instance.pos.decode("utf-8")
-        x_most_frequent_baseline.append(most_frequent_baseline(lemma))
-        x_lesk_syn_predictions.append(lesk_wsd(context, lemma))
-        x_lesk_syn_predictions_pos.append(lesk_wsd(context, lemma, pos = pos_tag_mapper(pos)))
-        
-        ##After preprocessing
-        context_pre = preprocess_context_sentence(context_list=context)
-        x_lesk_syn_predictions_pre.append(lesk_wsd(context_pre, lemma))
-        x_lesk_syn_predictions_pre_pos.append(lesk_wsd(context=context_pre, lemma = lemma, pos=pos_tag_mapper(pos)))
-
-        #My Methods:
-        #METHOD A:
-        x_corpus_lesk.append(corpus_lesk(context, lemma))
-
+    data_dev = process_data(dev_key, dev_instances)
+    method_calls(data_dev, "Dev")
     
-    display_dict['most_frequent_baseline'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
-    display_dict['lesk_score_raw'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
-    display_dict['lesk_score_pos'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pos)
-    display_dict['lesk_score_preprocessed'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre)
-    display_dict["lesk_score_preprocessed_pos"] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre_pos)
-    display_dict["corpus_lesk"] = score_synset_lists(y_correct_labels, x_corpus_lesk)
-    
-    table = tabulate(display_dict.items(), headers=["Method", "Score"], tablefmt="pretty")
-    print(table)
+    data_test = process_data(test_key, test_instances)
+    method_calls(data_test, "Test")
 
 
 if __name__ == '__main__':
