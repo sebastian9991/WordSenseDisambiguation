@@ -3,7 +3,9 @@ import torch.nn as nn
 from transformers import BertModel, BertTokenizer
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
-
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import numpy as np
 # Initialize BERT model and tokenizer
 #We use this for dynamic embeddings
 bert_model_name = 'bert-base-uncased'
@@ -88,6 +90,7 @@ def pre_process_FNN(data):
     words = []
     context_sentences = []
     sense_sentences = []
+    incorrect_sense_sentences = []
     for element in data:
         words.append(element['word'])
         context_sentences.append(' '.join(element['context']))
@@ -97,24 +100,29 @@ def pre_process_FNN(data):
             sense_sentences.append(element['label'].examples()[0])
         else: 
             sense_sentences.append(element['label'].definition())
+        if element['incorrect_label'].examples() != []:
+            incorrect_sense_sentences.append(element['incorrect_label'].examples()[0])
+        else: 
+            incorrect_sense_sentences.append(element['incorrect_label'].definition())
+        
 
     
     assert(len(words) == len(context_sentences))
     assert(len(sense_sentences) == len(context_sentences))
-    return words, context_sentences, sense_sentences 
+    return words, context_sentences, sense_sentences, incorrect_sense_sentences
 
 '''
 Train the model
 '''
 def train(model, data):
 
-    words, context_sentences, sense_sentences = pre_process_FNN(data)
+    words, context_sentences, sense_sentences, incorrect_sense_sentences = pre_process_FNN(data)
 
-    # Initialize dataset and dataloader
+    # Initialize dataset and dataloader (We'll use this to iterate more simply)
     dataset = WordSenseDataset(words, context_sentences, sense_sentences)
     dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
 
-    # Loss and optimizer
+    # Loss and optimizer (We will use cosine similarity)
     criterion = CosineSimilarityLoss() #We defined a specific cosine loss here
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
@@ -135,12 +143,13 @@ def train(model, data):
 '''
 Predicts the sense_sentence embeddings; returns score (cosine similarity) (not 1 - loss)
 '''
-def predict(model, word, context_sentence, sense_sentence):
+def predict(model, word, context_sentence, sense_sentence, incorrect_sense_sentence):
     model.eval()
 
     word_embedding = get_bert_embedding(word)
     context_embedding = get_bert_embedding(context_sentence)
     sense_embedding = get_bert_embedding(sense_sentence)
+    incorrect_sense_embedding = get_bert_embedding(incorrect_sense_sentence)
 
     input_embedding = torch.cat((word_embedding, context_embedding), dim = 1)
 
@@ -149,11 +158,8 @@ def predict(model, word, context_sentence, sense_sentence):
     
     criterion = CosineSimilarityLoss()
 
-    return  1 - criterion(predicted_sense_embedding, sense_embedding)
-
-
-
-    
+    return  (1 - criterion(predicted_sense_embedding, sense_embedding)), (1 - criterion(predicted_sense_embedding, incorrect_sense_embedding))
+ 
     
 
 model = FeedForwardNN()
@@ -162,9 +168,12 @@ def call_train(data):
     train(model, data)
 
 def call_predict(data):
-    words, context_sentences, sense_sentences = pre_process_FNN(data)
-    sum = 0
-    for word, context_sentence, sense_sentence in zip(words, context_sentences, sense_sentences):
-        sum += predict(model, word, context_sentence, sense_sentence)
-    return sum / len(data)
+    words, context_sentences, sense_sentences, incorrect_sense_sentences = pre_process_FNN(data)
+    sum_correct = 0
+    sum_incorrect = 0
+    for word, context_sentence, sense_sentence, incorrect_sense_sentence in zip(words, context_sentences, sense_sentences, incorrect_sense_sentences):
+        sum_correct += predict(model, word, context_sentence, sense_sentence, incorrect_sense_sentence)[0]
+        sum_incorrect += predict(model, word, context_sentence, sense_sentence, incorrect_sense_sentence)[1]
+
+    return (sum_correct / len(data)), (sum_incorrect / len(data))
     

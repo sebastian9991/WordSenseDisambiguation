@@ -10,6 +10,7 @@ from nltk.wsd import lesk
 from nltk.corpus import stopwords
 from collections import defaultdict
 from tabulate import tabulate
+import matplotlib.pyplot as plt
 
 '''
 Convert the wordnet keys to Synets. We assume this is the correct label
@@ -157,6 +158,7 @@ def score_synset_lists(syn_1_l, syn_2_l):
     for syn_1, syn_2 in zip(syn_1_l, syn_2_l):
         sum += syn_1.path_similarity(syn_2)
 
+    assert(len(syn_1_l) == len(syn_1_l))
     return sum / len(syn_1_l)
 
 
@@ -203,14 +205,24 @@ Process a dictonary that is better structured for my methods, and refactoring
 def process_data(keys, instances):
     data = []
     for item, key in zip(instances.items(), keys):
-        data_element = {"word": "", "context": "", "pos": "", "label": ""}
+        data_element = {"word": "", "context": None, "pos": None, "label": None, "incorrect_label": None}
         syn_key = keys[key][0]
         y_label = key_to_synets(syn_key)
         wsd_instance = item[1]
         context = list(map(lambda x: x.decode("utf-8"), wsd_instance.context))
         lemma = wsd_instance.lemma.decode("utf-8")
         pos = wsd_instance.pos.decode("utf-8")
+        #Get incorrect label
+        synsets = wn.synsets(lemma)
+        for sense in synsets:
+            if sense.path_similarity(y_label) != 1:
+                data_element['incorrect_label'] = sense
+                break
+        if data_element['incorrect_label'] is None:
+            print("No Incorrect Label found")
+            data_element['incorrect_label'] = y_label
 
+        
         data_element['word'] = lemma
         data_element['context'] = context    
         data_element['pos'] = pos
@@ -230,7 +242,9 @@ def method_calls(data, title_string):
         "lesk_score_preprocessed": 0, 
         "lesk_score_preprocessed_pos": 0, 
         "corpus_lesk": 0, 
+        "corpus_lesk_pos": 0, 
         "FFN, BERT-Embeddings" :0, 
+        "FFN, BERT-Embeddings, incorrect-labels": 0,
     }
 
     y_correct_labels = []
@@ -240,6 +254,7 @@ def method_calls(data, title_string):
     x_lesk_syn_predictions_pre = []
     x_lesk_syn_predictions_pre_pos = []
     x_corpus_lesk = [] 
+    x_corpus_lesk_pos = [] 
 
     for element in data:
         #Get label:
@@ -258,6 +273,7 @@ def method_calls(data, title_string):
         #My Methods:
         #METHOD A: Corpus Lesk
         x_corpus_lesk.append(corpus_lesk(element['context'], element['word']))
+        x_corpus_lesk_pos.append(corpus_lesk(element['context'], element['word'], pos= pos_tag_mapper(element['pos'])))
 
 
     #Method B: FFN with Bert embeddings
@@ -270,16 +286,33 @@ def method_calls(data, title_string):
 
 
     
-    display_dict['most_frequent_baseline'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
+    display_dict['most_frequent_baseline'] = score_synset_lists(y_correct_labels, x_most_frequent_baseline)
     display_dict['lesk_score_raw'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions)
     display_dict['lesk_score_pos'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pos)
     display_dict['lesk_score_preprocessed'] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre)
     display_dict["lesk_score_preprocessed_pos"] = score_synset_lists(y_correct_labels, x_lesk_syn_predictions_pre_pos)
     display_dict["corpus_lesk"] = score_synset_lists(y_correct_labels, x_corpus_lesk)
-    display_dict["FFN, BERT-Embeddings"] = call_predict(data)
+    display_dict["corpus_lesk_pos"] = score_synset_lists(y_correct_labels, x_corpus_lesk_pos)
+    display_dict["FFN, BERT-Embeddings"] = call_predict(data)[0]
+    display_dict["FFN, BERT-Embeddings, incorrect-labels"] = call_predict(data)[1]
     
     table = tabulate(display_dict.items(), headers=["Method", title_string + " Score"], tablefmt="pretty")
     print(table)
+
+    #for plots
+    methods = list(display_dict.keys()) 
+    scores = list(display_dict.values()) 
+
+    plt.figure(figsize=(10, 6))
+    plt.bar(methods, scores, color='skyblue')
+    plt.ylabel('Scores')
+    plt.xlabel('Methods')
+    plt.title(f'{title_string} - Score Distribution')
+    plt.ylim(0, 1)  
+    plt.xticks(rotation=45, ha='right') 
+    plt.tight_layout()
+
+    plt.show()
 
     
 '''
@@ -303,6 +336,21 @@ def main():
     
     data_test = process_data(test_key, test_instances)
     method_calls(data_test, "Test")
+
+
+
+    ##Example output
+    #We define two sentences to observe the output of Corpus Lesk
+    # The plant was thriving despite the harsh winter conditions.
+    #Do we mean plant as in  plant.n.01 or plant.n.02
+    context = ['The', 'plant', 'was', 'thriving', 'despite', 'the', 'harsh', 'winter', 'conditions']
+    word = 'plant'
+    sense = wn.synset('plant.n.01')
+    syn_corpus_lesk = corpus_lesk(context_sentence=context, ambiguous_word=word)
+    print("Synset corpus lesk output:")
+    print(syn_corpus_lesk) 
+
+
 
 
 if __name__ == '__main__':
